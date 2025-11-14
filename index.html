@@ -1,52 +1,71 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wavetable LFO Generator</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Wavetable LFO Generator</title>
+  <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-    <div class="container">
-        <h1>Wavetable LFO Generator</h1>
-        <p>Generates a 256-frame wavetable (256 samples/frame) for sequencer LFOs.</p>
+  <div class="container">
+    <h1>Wavetable LFO Generator</h1>
+    <p>Generates a 256‑frame wavetable (2048 samples/frame) for sequencer LFOs.</p>
 
-        <div class="control-group">
-            <label for="numEvents">Number of Events (1-16)</label>
-            <div class="control">
-                <input type="range" id="numEvents" min="1" max="16" value="4">
-                <span id="numEventsValue">4</span>
-            </div>
-        </div>
-
-        <div class="control-group">
-            <label for="eventShape">Event Shape</label>
-            <div class="control">
-                <select id="eventShape">
-                    <option value="sine">Sine (Half)</option>
-                    <option value="triangle">Triangle</option>
-                    <option value="saw">Saw (Ramp Up)</option>
-                    <option value="pulse">Pulse (50%)</option>
-                    <option value="random">Random</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="control-group">
-            <label for="combineChance">Combine Adjacent (0-50%)</label>
-            <div class="control">
-                <input type="range" id="combineChance" min="0" max="50" value="0">
-                <span id="combineChanceValue">0%</span>
-            </div>
-        </div>
-
-        <button id="generateButton">Generate Wavetable</button>
-        
-        <p id="statusMessage"></p>
-        
-        <a id="downloadLink" class="hidden">Download</a>
+    <!-- Steps per frame -->
+    <div class="control-group">
+      <label for="stepsPerFrame">Steps per Frame (4–32)</label>
+      <div class="control">
+        <input type="range" id="stepsPerFrame" min="4" max="32" value="16">
+        <span id="stepsPerFrameValue">16</span>
+      </div>
     </div>
 
-    <script src="app.js"></script>
+    <div class="control-group">
+      <label for="numEvents">Number of Events (1–24)</label>
+      <div class="control">
+        <input type="range" id="numEvents" min="1" max="24" value="8">
+        <span id="numEventsValue">8</span>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label for="eventShape">Event Shape</label>
+      <div class="control">
+        <select id="eventShape">
+          <option value="sine">Sine (Half)</option>
+          <option value="triangle">Triangle</option>
+          <option value="saw">Saw (Ramp Up)</option>
+          <option value="pulse">Pulse (50%)</option>
+          <option value="random">Random</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label for="combineChance">Combine Adjacent (0–50%)</label>
+      <div class="control">
+        <input type="range" id="combineChance" min="0" max="50" value="0">
+        <span id="combineChanceValue">0%</span>
+      </div>
+    </div>
+
+    <!-- NEW: Export format -->
+    <div class="control-group">
+      <label for="exportFormat">Export Format</label>
+      <div class="control">
+        <select id="exportFormat">
+          <option value="wav">WAV (.wav)</option>
+          <option value="wt">WT (.wt)</option>
+        </select>
+      </div>
+    </div>
+
+    <button id="generateButton">Generate Wavetable</button>
+
+    <p id="statusMessage"></p>
+    <a id="downloadLink" class="hidden">Download</a>
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>
