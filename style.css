@@ -1,0 +1,150 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: #282c34;
+    color: #abb2bf;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+}
+
+.container {
+    background-color: #3b4049;
+    padding: 2rem 3rem;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    width: 400px;
+}
+
+h1 {
+    color: #61afef;
+    margin-top: 0;
+    text-align: center;
+}
+
+p {
+    font-size: 0.9rem;
+    color: #98c379;
+    text-align: center;
+    border-bottom: 1px solid #4b515c;
+    padding-bottom: 1rem;
+    margin-bottom: 2rem;
+}
+
+.control-group {
+    margin-bottom: 1.5rem;
+}
+
+.control-group label {
+    display: block;
+    font-weight: bold;
+    margin-bottom: 0.5rem;
+    color: #e5c07b;
+}
+
+.control {
+    display: flex;
+    align-items: center;
+}
+
+.control select {
+    width: 100%;
+    padding: 0.5rem;
+    border-radius: 4px;
+    border: 1px solid #4b515c;
+    background-color: #282c34;
+    color: #abb2bf;
+    font-size: 1rem;
+}
+
+.control input[type="range"] {
+    flex-grow: 1;
+    margin-right: 1rem;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 8px;
+    background: #4b515c;
+    border-radius: 5px;
+    outline: none;
+}
+
+.control input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    background: #61afef;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.control input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    background: #61afef;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.control span {
+    font-weight: bold;
+    color: #c678dd;
+    min-width: 35px;
+    text-align: right;
+}
+
+button {
+    width: 100%;
+    padding: 0.75rem;
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: #282c34;
+    background-color: #98c379;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    margin-top: 1rem;
+}
+
+button:hover {
+    background-color: #a9d18b;
+}
+
+/* Added style for the status message */
+#statusMessage {
+    color: #98c379;
+    text-align: center;
+    margin-top: 1.5rem;
+    margin-bottom: 0;
+    padding: 0;
+    font-weight: bold;
+    height: 1.2em; /* Reserves space to prevent layout jump */
+    border: none;
+}
+
+#downloadLink {
+    display: block;
+    width: 100%;
+    text-align: center;
+    padding: 0.75rem;
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: #282c34;
+    background-color: #e5c07b;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    text-decoration: none;
+    margin-top: 1rem;
+    box-sizing: border-box; /* Ensures padding doesn't affect width */
+}
+
+#downloadLink:hover {
+    background-color: #eec98f;
+}
+
+.hidden {
+    display: none;
+}
