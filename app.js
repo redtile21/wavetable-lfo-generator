@@ -1,295 +1,346 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // --- Constants ---
-    const TOTAL_FRAMES = 256;
-    const SAMPLES_PER_FRAME = 256;
-    const STEPS_PER_FRAME = 16;
-    const SAMPLES_PER_STEP = SAMPLES_PER_FRAME / STEPS_PER_FRAME; // 16
+  // --- Constants ---
+  const TOTAL_FRAMES = 256;
+  const SAMPLES_PER_FRAME = 2048;     // industry standard frame size
+  const MAX_UNIQUE_FRAMES = 64;       // cap of unique (key) sequences
 
-    // --- UI Elements ---
-    const numEventsSlider = document.getElementById('numEvents');
-    const numEventsValue = document.getElementById('numEventsValue');
-    const shapeSelect = document.getElementById('eventShape');
-    const combineSlider = document.getElementById('combineChance');
-    const combineValue = document.getElementById('combineChanceValue');
-    const generateButton = document.getElementById('generateButton');
-    const downloadLink = document.getElementById('downloadLink');
-    // **CHANGED:** Added status message element
-    const statusMessage = document.getElementById('statusMessage');
+  // --- UI Elements ---
+  const stepsSlider     = document.getElementById('stepsPerFrame');
+  const stepsValue      = document.getElementById('stepsPerFrameValue');
+  const numEventsSlider = document.getElementById('numEvents');
+  const numEventsValue  = document.getElementById('numEventsValue');
+  const shapeSelect     = document.getElementById('eventShape');
+  const combineSlider   = document.getElementById('combineChance');
+  const combineValue    = document.getElementById('combineChanceValue');
+  const exportSelect    = document.getElementById('exportFormat');     // NEW
+  const generateButton  = document.getElementById('generateButton');
+  const downloadLink    = document.getElementById('downloadLink');
+  const statusMessage   = document.getElementById('statusMessage');
 
-    let wavBlobUrl = null; // Store the blob URL to revoke it later
+  let fileBlobUrl = null;
 
-    // --- UI Event Listeners ---
-    numEventsSlider.addEventListener('input', () => {
-        numEventsValue.textContent = numEventsSlider.value;
+  // --- UI wiring ---
+  stepsSlider.addEventListener('input', () => {
+    stepsValue.textContent = stepsSlider.value;
+    syncEventSliderMax();
+  });
+  numEventsSlider.addEventListener('input', () => {
+    numEventsValue.textContent = numEventsSlider.value;
+  });
+  combineSlider.addEventListener('input', () => {
+    combineValue.textContent = `${combineSlider.value}%`;
+  });
+
+  generateButton.addEventListener('click', () => {
+    statusMessage.textContent = 'Generating...';
+    downloadLink.classList.add('hidden');
+
+    const steps          = clamp(parseInt(stepsSlider.value, 10), 4, 32);
+    const maxEventsHere  = Math.min(24, steps);
+    const numEvents      = clamp(parseInt(numEventsSlider.value, 10), 1, maxEventsHere);
+    const eventShape     = shapeSelect.value;
+    const combineChance  = parseInt(combineSlider.value, 10) / 100.0;
+    const combinePercent = parseInt(combineSlider.value, 10);
+    const exportFormat   = exportSelect.value; // "wav" | "wt"
+
+    setTimeout(() => {
+      const stepSizes = computeStepSizes(SAMPLES_PER_FRAME, steps);
+      generateAndExport(stepSizes, numEvents, eventShape, combineChance, combinePercent, exportFormat);
+    }, 50);
+  });
+
+  function syncEventSliderMax() {
+    const steps = clamp(parseInt(stepsSlider.value, 10), 4, 32);
+    const maxEventsHere = Math.min(24, steps);
+    numEventsSlider.max = String(maxEventsHere);
+    if (parseInt(numEventsSlider.value, 10) > maxEventsHere) {
+      numEventsSlider.value = String(maxEventsHere);
+      numEventsValue.textContent = numEventsSlider.value;
+    }
+  }
+  syncEventSliderMax();
+
+  // --- Orchestration ---
+  function generateAndExport(stepSizes, numEvents, eventShape, combineChance, combinePercent, exportFormat) {
+    const randomShape = eventShape === 'random' ? generateRandomShape(512) : null;
+
+    // 0/1 patterns → combine some into 2s → dedupe → order by similarity
+    const steps = stepSizes.length;
+    const unique01     = generateUniquePatterns(MAX_UNIQUE_FRAMES, steps, numEvents);
+    const combined     = applyCombineLogic(unique01, combineChance);
+    const uniqueCombined = dedupePatterns(combined);
+    const ordered      = orderBySimilarity(uniqueCombined);
+
+    // Render key frames, then morph to 256
+    const keyFrames = ordered.map(p => renderPatternToFrame(p, stepSizes, eventShape, randomShape));
+    const allFrames = insertInterpolatedFrames(keyFrames, TOTAL_FRAMES);
+
+    // Flatten samples into a single Float32 buffer in [-1, 1]
+    const audioData = flattenFrames(allFrames, SAMPLES_PER_FRAME);
+
+    // Create the requested file format
+    let blob, filenameBase =
+      `WT_${steps}steps_${numEvents}ev_${eventShape}_${combinePercent}pct_2048spf_${TOTAL_FRAMES}f`;
+
+    if (exportFormat === 'wt') {
+      // Mirror your Python converter: "vawt" + wave_size + wave_count + 0 + float32 payload (LE).
+      // Ref: convert-wav-wavetables-to-wt-format.py :contentReference[oaicite:6]{index=6}
+      blob = createWtBlob(audioData, SAMPLES_PER_FRAME, TOTAL_FRAMES);
+      setDownload(blob, `${filenameBase}.wt`);
+    } else {
+      blob = createWavBlob(audioData, 44100, SAMPLES_PER_FRAME * TOTAL_FRAMES);
+      setDownload(blob, `${filenameBase}.wav`);
+    }
+
+    statusMessage.textContent = 'Wavetable Generated!';
+  }
+
+  function setDownload(blob, filename) {
+    if (fileBlobUrl) URL.revokeObjectURL(fileBlobUrl);
+    fileBlobUrl = URL.createObjectURL(blob);
+    downloadLink.href = fileBlobUrl;
+    downloadLink.download = filename;
+    downloadLink.classList.remove('hidden');
+  }
+
+  // --- Math / helpers ---
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // Integer partition of 2048 across 'steps' so sizes sum exactly to 2048
+  function computeStepSizes(total, steps) {
+    const sizes = new Array(steps);
+    for (let i = 0; i < steps; i++) {
+      const a = Math.floor((i * total) / steps);
+      const b = Math.floor(((i + 1) * total) / steps);
+      sizes[i] = b - a;
+    }
+    return sizes;
+  }
+
+  function generateRandomShape(length) {
+    const shape = new Float32Array(length);
+    let current = Math.random(), next = current;
+    for (let i = 0; i < length; i++) {
+      if (i % 4 === 0) { current = next; next = Math.random(); }
+      const t = (i % 4) / 4;
+      shape[i] = current * (1 - t) + next * t;
+    }
+    const fade = Math.floor(length / 8);
+    for (let i = 0; i < fade; i++) {
+      const a = i / fade;
+      shape[i] *= a;
+      shape[length - 1 - i] *= a;
+    }
+    return shape;
+  }
+
+  // Choose up to 'desiredCount' unique 0/1 patterns with exactly 'eventCount' ones
+  function binomial(n, k) {
+    if (k < 0 || k > n) return 0;
+    if (k === 0 || k === n) return 1;
+    k = Math.min(k, n - k);
+    let res = 1;
+    for (let i = 1; i <= k; i++) res = (res * (n - k + i)) / i;
+    return Math.round(res);
+  }
+  function generateUniquePatterns(desiredCount, stepCount, eventCount) {
+    const e = Math.min(eventCount, stepCount);
+    const theoreticalMax = binomial(stepCount, e);
+    const target = Math.min(desiredCount, theoreticalMax || 1);
+    const seen = new Set(), out = [];
+    if (e === 0) { out.push(new Uint8Array(stepCount).fill(0)); return out; }
+    while (out.length < target) {
+      const p = new Uint8Array(stepCount).fill(0);
+      let placed = 0;
+      while (placed < e) {
+        const pos = Math.floor(Math.random() * stepCount);
+        if (p[pos] === 0) { p[pos] = 1; placed++; }
+      }
+      const key = p.join('');
+      if (!seen.has(key)) { seen.add(key); out.push(p); }
+    }
+    return out;
+  }
+
+  // Combine logic: [1,1] -> [2,0] with probability 'chance'
+  function applyCombineLogic(patterns, chance) {
+    return patterns.map(src => {
+      const p = [...src];
+      for (let i = 0; i < p.length - 1; i++) {
+        if (p[i] === 1 && p[i + 1] === 1 && Math.random() < chance) {
+          p[i] = 2; p[i + 1] = 0; i++;
+        }
+      }
+      return p;
     });
+  }
 
-    combineSlider.addEventListener('input', () => {
-        combineValue.textContent = `${combineSlider.value}%`;
-    });
-
-    generateButton.addEventListener('click', () => {
-        // **CHANGED:** Update UI to show feedback
-        statusMessage.textContent = 'Generating...';
-        downloadLink.classList.add('hidden');
-        
-        // Get settings from UI
-        const numEvents = parseInt(numEventsSlider.value, 10);
-        const eventShape = shapeSelect.value;
-        const combineChance = parseInt(combineSlider.value, 10) / 100.0;
-        const combinePercent = parseInt(combineSlider.value, 10); // For filename
-
-        console.log(`Generating ${TOTAL_FRAMES} frames...`);
-        console.log(`Settings: Events=${numEvents}, Shape=${eventShape}, Combine=${combineChance}`);
-        
-        // Use a small timeout to allow the "Generating..." message to render
-        setTimeout(() => {
-            generateWavetable(numEvents, eventShape, combineChance, combinePercent);
-        }, 50); // 50ms delay
-    });
-
-    // --- Generation Logic ---
-
-    function generateWavetable(numEvents, eventShape, combineChance, combinePercent) {
-        // 1. Generate the base "random" shape if needed
-        const randomShape = eventShape === 'random' ? generateRandomShape(SAMPLES_PER_STEP) : null;
-
-        // 2. Generate all 256 unique patterns
-        let patterns = generatePatterns(TOTAL_FRAMES, STEPS_PER_FRAME, numEvents);
-
-        // 3. Apply "combine" logic to the patterns
-        let combinedPatterns = applyCombineLogic(patterns, combineChance);
-
-        // 4. Render the audio data
-        const audioData = renderAudioData(combinedPatterns, eventShape, randomShape);
-
-        // 5. Create the WAV file blob
-        const wavBlob = createWavBlob(audioData, 44100, SAMPLES_PER_FRAME * TOTAL_FRAMES);
-
-        // 6. Set up the download link
-        if (wavBlobUrl) {
-            URL.revokeObjectURL(wavBlobUrl); // Clean up old blob URL
-        }
-        wavBlobUrl = URL.createObjectURL(wavBlob);
-        downloadLink.href = wavBlobUrl;
-        
-        // **CHANGED:** Set dynamic filename
-        downloadLink.download = `WT_${numEvents}_${eventShape}_${combinePercent}.wav`;
-        
-        downloadLink.classList.remove('hidden');
-        
-        // **CHANGED:** Update status message
-        statusMessage.textContent = 'Wavetable Generated!';
-        
-        console.log("Wavetable generated and ready for download.");
+  function dedupePatterns(patterns) {
+    const out = [], seen = new Set();
+    for (const p of patterns) {
+      const key = p.join('');
+      if (!seen.has(key)) { seen.add(key); out.push(p); }
+      if (out.length === MAX_UNIQUE_FRAMES) break;
     }
+    return out;
+  }
 
-    /**
-     * Generates a 1D array (table) for a random single-cycle waveform.
-     */
-    function generateRandomShape(length) {
-        let shape = new Float32Array(length);
-        // Simple random points, slightly smoothed
-        let randVal = Math.random();
-        let lastVal = randVal;
-        for (let i = 0; i < length; i++) {
-            if (i % 4 === 0) { // Change value every 4 samples
-                randVal = Math.random();
-            }
-            // Linear interpolation between points
-            let t = (i % 4) / 4.0;
-            shape[i] = lastVal * (1 - t) + randVal * t;
-        }
-        // Ensure it starts and ends at 0 for a clean loop (optional, but good)
-        // For this unipolar case, we just taper the ends.
-        let fadeSamples = Math.floor(length / 8);
-        for(let i = 0; i < fadeSamples; i++) {
-            let t = i / fadeSamples;
-            shape[i] *= t;
-            shape[length - 1 - i] *= t;
-        }
-        return shape;
+  // Similarity ordering (Hamming on binary occupancy; '2' occupies two steps)
+  function patternToBinaryMask(p) {
+    const m = new Uint8Array(p.length);
+    for (let i = 0; i < p.length; i++) {
+      if (p[i] === 1) m[i] = 1;
+      else if (p[i] === 2) { m[i] = 1; if (i + 1 < p.length) m[i + 1] = 1; }
     }
-
-    /**
-     * Generates an array of 256 unique, random 16-step patterns.
-     */
-    function generatePatterns(frameCount, stepCount, eventCount) {
-        let patterns = new Set(); // Use a Set to easily check for uniqueness
-        let finalPatterns = [];
-
-        while (patterns.size < frameCount) {
-            let pattern = new Uint8Array(stepCount).fill(0);
-            let eventsPlaced = 0;
-            while (eventsPlaced < eventCount) {
-                let pos = Math.floor(Math.random() * stepCount);
-                if (pattern[pos] === 0) {
-                    pattern[pos] = 1;
-                    eventsPlaced++;
-                }
-            }
-            // Add to Set as a string to ensure uniqueness check works
-            patterns.add(pattern.join(''));
-        }
-        
-        // Convert the Set of strings back to arrays of numbers
-        patterns.forEach(pStr => {
-            finalPatterns.push(pStr.split('').map(Number));
-        });
-        
-        return finalPatterns;
+    return m;
+  }
+  function hamming(a, b) { let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d; }
+  function orderBySimilarity(patterns) {
+    const N = patterns.length;
+    if (N <= 1) return patterns.slice();
+    const masks = patterns.map(patternToBinaryMask);
+    const dist = Array.from({ length: N }, () => new Array(N).fill(0));
+    for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
+      const d = hamming(masks[i], masks[j]); dist[i][j] = dist[j][i] = d;
     }
-
-    /**
-     * Modifies patterns based on combine logic.
-     * Replaces [1, 1] with [2, 0] based on probability.
-     */
-    function applyCombineLogic(patterns, chance) {
-        return patterns.map(pattern => {
-            let newPattern = [...pattern]; // Work on a copy
-            for (let i = 0; i < newPattern.length - 1; i++) {
-                // Check for adjacent events
-                if (newPattern[i] === 1 && newPattern[i + 1] === 1) {
-                    // Check probability
-                    if (Math.random() < chance) {
-                        newPattern[i] = 2;   // Mark as double-length event
-                        newPattern[i + 1] = 0; // Clear the next event
-                        i++; // Skip the next event since we just processed it
-                    }
-                }
-            }
-            return newPattern;
-        });
+    let start = 0, bestAvg = Infinity;
+    for (let i = 0; i < N; i++) {
+      const avg = dist[i].reduce((a, b) => a + b, 0) / (N - 1 || 1);
+      if (avg < bestAvg) { bestAvg = avg; start = i; }
     }
-
-    /**
-     * Renders the full wavetable audio data from the patterns.
-     */
-    function renderAudioData(patterns, shape, randomShape) {
-        const totalSamples = TOTAL_FRAMES * SAMPLES_PER_FRAME;
-        // Initialize buffer to -1.0 (silence)
-        let audio = new Float32Array(totalSamples).fill(-1.0);
-        let audioPos = 0;
-
-        for (let frame = 0; frame < TOTAL_FRAMES; frame++) {
-            const pattern = patterns[frame];
-            
-            for (let step = 0; step < STEPS_PER_FRAME; step++) {
-                const eventType = pattern[step];
-                let duration = SAMPLES_PER_STEP; // Default 16 samples
-                
-                if (eventType === 0) {
-                    // Silence. Buffer is already -1.0, so just advance position.
-                    audioPos += duration;
-                } else {
-                    if (eventType === 2) {
-                        duration = SAMPLES_PER_STEP * 2; // 32 samples
-                    }
-
-                    // Render the shape
-                    renderShape(audio, audioPos, duration, shape, randomShape);
-
-                    audioPos += duration; // Advance by the duration
-                    
-                    if (eventType === 2) {
-                        step++; // Skip the next step index
-                    }
-                }
-            }
-        }
-        return audio;
+    const visited = new Array(N).fill(false);
+    const order = [start]; visited[start] = true;
+    for (let k = 1; k < N; k++) {
+      const last = order[order.length - 1];
+      let best = -1, bestD = Infinity;
+      for (let j = 0; j < N; j++) if (!visited[j] && dist[last][j] < bestD) { bestD = dist[last][j]; best = j; }
+      order.push(best); visited[best] = true;
     }
+    return order.map(i => patterns[i]);
+  }
 
-    /**
-     * Writes a single shape into the audio buffer at a given position.
-     * All shapes are 0.0 to 1.0 (unipolar).
-     */
-    function renderShape(buffer, startPos, duration, shape, randomShape) {
-        for (let i = 0; i < duration; i++) {
-            // 't' is the phase, from 0.0 to 1.0
-            let t = (i / (duration - 1)); 
-            if (duration === 1) t = 1.0; // Avoid divide by zero if duration is 1
-            
-            let sample = 0.0; // This is the [0.0, 1.0] unipolar sample
-
-            switch (shape) {
-                case 'sine':
-                    // Half-cycle (positive portion of sine wave)
-                    sample = Math.sin(t * Math.PI);
-                    break;
-                case 'triangle':
-                    // Full triangle cycle (0 -> 1 -> 0)
-                    sample = 1.0 - Math.abs((t * 2.0) - 1.0);
-                    break;
-                case 'saw':
-                    // Ramp up
-                    sample = t;
-                    break;
-                case 'pulse':
-                    // 50% pulse
-                    sample = t < 0.5 ? 1.0 : 0.0;
-                    break;
-                case 'random':
-                    // Stretch the pre-generated random shape to fit
-                    let randIdx = Math.floor(t * (randomShape.length - 1));
-                    sample = randomShape[randIdx];
-                    break;
-            }
-            
-            // Remap from [0.0, 1.0] unipolar to [-1.0, 1.0] bipolar
-            let bipolarSample = (sample * 2.0) - 1.0;
-            
-            // Ensure sample is within bounds (prevents clicks)
-            buffer[startPos + i] = Math.max(-1.0, Math.min(1.0, bipolarSample));
-        }
+  // Rendering
+  function renderPatternToFrame(pattern, stepSizes, shape, randomShape) {
+    const buf = new Float32Array(SAMPLES_PER_FRAME).fill(-1.0);
+    const steps = stepSizes.length;
+    let pos = 0;
+    for (let s = 0; s < steps; s++) {
+      const type = pattern[s];
+      if (type === 0) {
+        pos += stepSizes[s];
+      } else {
+        let duration = stepSizes[s];
+        if (type === 2) duration += stepSizes[s + 1] || 0;
+        renderShape(buf, pos, duration, shape, randomShape);
+        pos += duration;
+        if (type === 2) s++;
+      }
     }
+    return buf;
+  }
 
-
-    // --- WAV File Creation ---
-    // This is boilerplate code to create a valid 16-bit PCM WAV file.
-
-    function createWavBlob(audioData, sampleRate, totalSamples) {
-        const dataSize = totalSamples * 2; // 16-bit (2 bytes)
-        const fileSize = 44 + dataSize; // 44 bytes for header
-        
-        const buffer = new ArrayBuffer(fileSize);
-        const view = new DataView(buffer);
-
-        // RIFF chunk descriptor
-        writeString(view, 0, 'RIFF');
-        view.setUint32(4, fileSize - 8, true); // file-size - 8
-        writeString(view, 8, 'WAVE');
-        
-        // "fmt " sub-chunk
-        writeString(view, 12, 'fmt ');
-        view.setUint32(16, 16, true); // chunk size
-        view.setUint16(20, 1, true); // audio format (1 = PCM)
-        view.setUint16(22, 1, true); // num channels
-        view.setUint32(24, sampleRate, true); // sample rate
-        view.setUint32(28, sampleRate * 2, true); // byte rate (SampleRate * NumChannels * BitsPerSample/8)
-        view.setUint16(32, 2, true); // block align (NumChannels * BitsPerSample/8)
-        view.setUint16(34, 16, true); // bits per sample
-        
-        // "data" sub-chunk
-        writeString(view, 36, 'data');
-        view.setUint32(40, dataSize, true); // sub-chunk size
-
-        // Write the audio data (converting float -1 to 1 to 16-bit int -32767 to 32767)
-        let offset = 44;
-        for (let i = 0; i < totalSamples; i++) {
-            // Clamp to [-1.0, 1.0]
-            let s = Math.max(-1.0, Math.min(1.0, audioData[i]));
-            // Map to bipolar 16-bit range
-            let val = Math.floor(s * 32767.0);
-            view.setInt16(offset, val, true);
-            offset += 2;
-        }
-
-        return new Blob([view], { type: 'audio/wav' });
+  function renderShape(buffer, startPos, duration, shape, randomShape) {
+    for (let i = 0; i < duration; i++) {
+      const t = (duration === 1) ? 1.0 : (i / (duration - 1));
+      let sample = 0.0;
+      switch (shape) {
+        case 'sine':     sample = Math.sin(t * Math.PI); break;               // half-cycle
+        case 'triangle': sample = 1.0 - Math.abs((t * 2.0) - 1.0); break;
+        case 'saw':      sample = t; break;
+        case 'pulse':    sample = (t < 0.5) ? 1.0 : 0.0; break;
+        case 'random':   sample = randomShape[Math.floor(t * (randomShape.length - 1))]; break;
+      }
+      buffer[startPos + i] = Math.max(-1.0, Math.min(1.0, (sample * 2.0) - 1.0));
     }
+  }
 
-    function writeString(view, offset, string) {
-        for (let i = 0; i < string.length; i++) {
-            view.setUint8(offset + i, string.charCodeAt(i));
-        }
+  // Interpolation & flatten
+  function insertInterpolatedFrames(keyFrames, totalTarget) {
+    const U = keyFrames.length;
+    if (U === 0) return [];
+    if (U === 1) return Array.from({ length: totalTarget }, () => keyFrames[0].slice());
+
+    const morphNeeded = totalTarget - U;
+    const gaps = U - 1;
+    const perGap = Math.floor(morphNeeded / gaps);
+    let remainder = morphNeeded % gaps;
+
+    const frames = [];
+    for (let i = 0; i < U - 1; i++) {
+      const a = keyFrames[i], b = keyFrames[i + 1];
+      frames.push(a);
+      const k = perGap + (remainder > 0 ? 1 : 0);
+      if (remainder > 0) remainder--;
+      for (let m = 1; m <= k; m++) {
+        const t = m / (k + 1);
+        frames.push(lerpFrames(a, b, t));
+      }
     }
+    frames.push(keyFrames[U - 1]);
+    return frames;
+  }
+  function lerpFrames(a, b, t) { const out = new Float32Array(a.length); for (let i = 0; i < a.length; i++) out[i] = a[i] * (1 - t) + b[i] * t; return out; }
+  function flattenFrames(frames, samplesPerFrame) { const out = new Float32Array(frames.length * samplesPerFrame); let pos = 0; for (const fr of frames) { out.set(fr, pos); pos += samplesPerFrame; } return out; }
+
+  // --- File creation ---
+  function createWavBlob(audioData, sampleRate, totalSamples) {
+    const dataSize = totalSamples * 2;
+    const fileSize = 44 + dataSize;
+    const buffer = new ArrayBuffer(fileSize);
+    const view = new DataView(buffer);
+
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, fileSize - 8, true);
+    writeString(view, 8, 'WAVE');
+
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+
+    writeString(view, 36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    let offset = 44;
+    for (let i = 0; i < totalSamples; i++) {
+      const s = Math.max(-1.0, Math.min(1.0, audioData[i]));
+      const val = Math.floor(s * 32767.0);
+      view.setInt16(offset, val, true);
+      offset += 2;
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
+  // NEW: WT file writer that mirrors your Python script (vawt + sizes + float32 payload).
+  // Ref: convert-wav-wavetables-to-wt-format.py :contentReference[oaicite:7]{index=7}
+  function createWtBlob(audioData, waveSize, waveCount) {
+    const headerSize = 4 + 4 + 2 + 2;               // 'vawt' + wave_size + wave_count + reserved
+    const totalSize  = headerSize + audioData.length * 4;
+    const buffer     = new ArrayBuffer(totalSize);
+    const view       = new DataView(buffer);
+
+    let o = 0;
+    // 'vawt'
+    writeString(view, o, 'vawt'); o += 4;
+    // wave_size (u32 LE)
+    view.setUint32(o, waveSize, true); o += 4;
+    // wave_count (u16 LE)
+    view.setUint16(o, waveCount, true); o += 2;
+    // reserved (u16 LE) = 0
+    view.setUint16(o, 0, true); o += 2;
+
+    // float32 payload, little-endian
+    for (let i = 0; i < audioData.length; i++, o += 4) {
+      view.setFloat32(o, audioData[i], true);
+    }
+    return new Blob([buffer], { type: 'application/octet-stream' });
+  }
+
+  function writeString(view, offset, str) {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
 });
