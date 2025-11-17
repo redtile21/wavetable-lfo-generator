@@ -240,83 +240,93 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderShape(buffer, startPos, duration, shape, randomShape) {
-    // Define the basic shape generators (output range [0.0, 1.0] for t in [0, 1])
+    // Basic shape generators (output range [0.0, 1.0] for t in [0, 1])
     const shapeGenerators = {
-        // Standard shapes
-        sine: (t) => Math.sin(t * Math.PI), // half-cycle, 0 to 1 back to 0
-        triangle: (t) => 1.0 - Math.abs((t * 2.0) - 1.0), // 0 to 1 back to 0
-        saw: (t) => t, // 0 to 1 (Ramp Up)
-        pulse: (t) => (t < 0.5) ? 1.0 : 0.0, // 1 then 0
+        // Full wave generators
+        sine: (t) => Math.sin(t * Math.PI),
+        triangle: (t) => 1.0 - Math.abs((t * 2.0) - 1.0),
+        saw: (t) => t,
+        // NEW REVERSE SAW: Starts at 1.0 and drops linearly to 0.0
+        reversesaw: (t) => 1.0 - t,
+        // Pulse: Stays high (1.0) until the very end (t < 1.0)
+        pulse: (t) => (t < 1.0) ? 1.0 : 0.0, 
         
-        // Helper for the fall/drop (Reverse Saw, 1.0 down to 0.0)
-        reversesaw: (t) => 1.0 - t, 
-        
-        // Helper for the gradual rise (Quarter Sine, 0.0 up to 1.0)
-        // We'll use Math.sin(t * Math.PI / 2)
-        quartersine: (t) => Math.sin(t * (Math.PI / 2.0)), 
-        // This makes t=0 -> 0.0, t=1 -> 1.0, with an accelerating curve (gradual rise)
+        // Helper for gradual rise (Quarter Sine, 0.0 up to 1.0)
+        quarter_sine: (t) => Math.sin(t * (Math.PI / 2.0)), 
+        // Helper for gradual fall (Quarter Cosine, 1.0 down to 0.0)
+        quarter_cosine: (t) => Math.cos(t * (Math.PI / 2.0)),
+        // Helper for constant high value (1.0)
+        high: () => 1.0,
     };
+    
+    // --- Helper function to get the correct portion of a wave for the first half (t_half in [0, 1])
+    function getSampleFromFirstHalf(generatorName, t_half) {
+        switch (generatorName) {
+            case 'sine':     return shapeGenerators.quarter_sine(t_half);   // 0 to 1
+            case 'triangle': return t_half;                                 // 0 to 1 (linear ramp up)
+            case 'saw':      return t_half;                                 // 0 to 1 (linear ramp up)
+            case 'reversesaw': return 1.0 - t_half;                         // 1 to 0 (linear ramp down)
+            case 'pulse':    return shapeGenerators.high(t_half);           // Constant 1.0
+            default:         return 0.0;
+        }
+    }
+    
+    // --- Helper function to get the correct portion of a wave for the second half (t_half in [0, 1])
+    function getSampleFromSecondHalf(generatorName, t_half) {
+        switch (generatorName) {
+            case 'sine':     return shapeGenerators.quarter_cosine(t_half); // 1 to 0
+            case 'triangle': return 1.0 - t_half;                           // 1 to 0 (linear ramp down)
+            case 'saw':      return 1.0 - t_half;                           // 1 to 0 (linear ramp down)
+            case 'reversesaw': return t_half;                               // 0 to 1 (linear ramp up)
+            case 'pulse':    return (t_half < 1.0) ? 1.0 : 0.0;             // Stays high, drops to 0.0 at the end
+            default:         return 0.0;
+        }
+    }
+
 
     for (let i = 0; i < duration; i++) {
-        // t is the progress through the duration, from 0.0 to 1.0
         const t = (duration === 1) ? 1.0 : (i / (duration - 1));
         let sample = 0.0;
 
-        // Check if the shape is a combination (e.g., 'sine_pulse')
         const parts = shape.split('_');
 
         if (parts.length === 2) {
-            // --- Combination Shape Logic (e.g., 'sine_pulse') ---
+            // --- Combination Shape Logic ---
             const firstShape = parts[0];
             const secondShape = parts[1];
             const isFirstHalf = t < 0.5;
             
-            // Map t from [0, 0.5) to t_half from [0, 1.0)
+            // t_half maps the current half-cycle time to [0, 1]
             const t_half = isFirstHalf ? (t * 2.0) : ((t - 0.5) * 2.0);
 
-            // Combination shapes rely on the 'sine' and 'triangle' generators peaking at t_half=0.5
-            // and returning to 0 at t_half=1.0. For the combinations, we need shapes that 
-            // go from 0 up to 1 in the first half of the cycle, and then 0 up to 1 in the second half.
-            // A simpler approach for combinations is to use the raw generators for half the cycle, 
-            // ensuring they are normalized to the [0, 1] range for that half.
-            
-            let generator;
             if (isFirstHalf) {
-                // First half uses the generator directly on t_half, assuming the generator maps [0, 1] to [0, 1]
-                generator = shapeGenerators[firstShape] || shapeGenerators['saw']; // Fallback to saw
+                // Get the first half of the first wave (0 to 1)
+                sample = getSampleFromFirstHalf(firstShape, t_half);
             } else {
-                // Second half uses the generator directly on t_half
-                generator = shapeGenerators[secondShape] || shapeGenerators['saw']; // Fallback to saw
+                // Get the second half of the second wave (1 to 0)
+                sample = getSampleFromSecondHalf(secondShape, t_half);
             }
-            sample = generator(t_half);
-
-
+            
         } else {
             // --- Basic and Custom Shape Logic ---
             switch (shape) {
                 case 'sine':
                 case 'triangle':
                 case 'saw':
+                case 'reversesaw': // <-- NEW CASE
                 case 'pulse':
                     sample = shapeGenerators[shape](t);
                     break;
                     
                 case 'shark':
-                    // **Shark Fin:** Gradual sine-like increase (Quarter Sine) then rapid linear decrease (Reverse Saw)
-                    const peakTime = 0.5; // Where the peak occurs (e.g., 50% through the cycle)
-                    
+                    const peakTime = 0.5;
                     if (t <= peakTime) {
-                        // Rise: Map t from [0, peakTime] to t_rise from [0, 1]
                         const t_rise = t / peakTime;
-                        // Use the quarter_sine for the gradual, smooth rise
-                        sample = shapeGenerators.quartersine(t_rise);
-                        
+                        sample = shapeGenerators.quarter_sine(t_rise); // Gradual sine-like increase (0 to 1)
                     } else {
-                        // Fall: Map t from [peakTime, 1.0] to t_fall from [0, 1]
                         const fallDuration = 1.0 - peakTime;
                         const t_fall = (t - peakTime) / fallDuration;
-                        // Use the reverse_saw for the rapid, linear drop, but map its range [1.0, 0.0]
-                        sample = 1.0 - t_fall;
+                        sample = 1.0 - t_fall; // Rapid linear decrease (1 to 0)
                     }
                     break;
                     
@@ -326,8 +336,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         
-        // Final normalization to the range [-1.0, 1.0] and clipping
-        // (sample * 2.0) - 1.0 converts the LFO signal from [0.0, 1.0] to [-1.0, 1.0]
+        // Final normalization and clipping
         buffer[startPos + i] = Math.max(-1.0, Math.min(1.0, (sample * 2.0) - 1.0));
     }
 }
@@ -422,5 +431,6 @@ document.addEventListener('DOMContentLoaded', () => {
     for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
   }
 });
+
 
 
