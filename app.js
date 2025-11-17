@@ -249,11 +249,11 @@ document.addEventListener('DOMContentLoaded', () => {
         pulse: (t) => (t < 0.5) ? 1.0 : 0.0, // 1 then 0
         
         // Helper for the fall/drop (Reverse Saw, 1.0 down to 0.0)
-        reverse_saw: (t) => 1.0 - t, 
+        reversesaw: (t) => 1.0 - t, 
         
         // Helper for the gradual rise (Quarter Sine, 0.0 up to 1.0)
         // We'll use Math.sin(t * Math.PI / 2)
-        quarter_sine: (t) => Math.sin(t * (Math.PI / 2.0)), 
+        quartersine: (t) => Math.sin(t * (Math.PI / 2.0)), 
         // This makes t=0 -> 0.0, t=1 -> 1.0, with an accelerating curve (gradual rise)
     };
 
@@ -309,7 +309,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Rise: Map t from [0, peakTime] to t_rise from [0, 1]
                         const t_rise = t / peakTime;
                         // Use the quarter_sine for the gradual, smooth rise
-                        sample = shapeGenerators.quarter_sine(t_rise);
+                        sample = shapeGenerators.quartersine(t_rise);
                         
                     } else {
                         // Fall: Map t from [peakTime, 1.0] to t_fall from [0, 1]
@@ -422,4 +422,5 @@ document.addEventListener('DOMContentLoaded', () => {
     for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
   }
 });
+
 
