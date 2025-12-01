@@ -69,16 +69,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const unique01     = generateUniquePatterns(MAX_UNIQUE_FRAMES, steps, numEvents);
     const combined     = applyCombineLogic(unique01, combineChance);
     const uniqueCombined = dedupePatterns(combined);
-    const orderedPatterns      = orderBySimilarity(uniqueCombined); // Renamed to clarify it's just the pattern array
+    const orderedPatterns      = orderBySimilarity(uniqueCombined);
 
-    // NEW: Associate each pattern with a random amplitude (0.25 to 1.0)
+    // MODIFICATION 1: Associate each pattern with a random amplitude
     const uniqueFramesWithAmp = orderedPatterns.map(p => ({
         pattern: p,
-        amplitude: Math.random() * 0.75 + 0.25 // Generates a random value in [0, 0.75] and shifts it to [0.25, 1.0]
+        amplitude: Math.random() * 0.75 + 0.25 // Random float between 0.25 and 1.0
     }));
 
     // Render key frames, then morph to 256
-    // NEW: Pass amplitude to the rendering function
     const keyFrames = uniqueFramesWithAmp.map(item =>
         renderPatternToFrame(item.pattern, stepSizes, eventShape, randomShape, item.amplitude)
     );
@@ -93,7 +92,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (exportFormat === 'wt') {
       // Mirror your Python converter: "vawt" + wave_size + wave_count + 0 + float32 payload (LE).
-      // Ref: convert-wav-wavetables-to-wt-format.py
       blob = createWtBlob(audioData, SAMPLES_PER_FRAME, TOTAL_FRAMES);
       setDownload(blob, `${filenameBase}.wt`);
     } else {
@@ -120,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sizes = new Array(steps);
     for (let i = 0; i < steps; i++) {
       const a = Math.floor((i * total) / steps);
-      const b = Math.floor(((i + 1) * total) / steps);
+      const b = Math.floor(((i + 1) * total) * total / steps);
       sizes[i] = b - a;
     }
     return sizes;
@@ -229,8 +227,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Rendering
-  function renderPatternToFrame(pattern, stepSizes, shape, randomShape, amplitude) { // ADDED amplitude
-    const buf = new Float32Array(SAMPLES_PER_FRAME).fill(-1.0);
+  function renderPatternToFrame(pattern, stepSizes, shape, randomShape, amplitude) { 
+    // CRITICAL FIX 1: Initialize buffer to 0.0 (silence) for correct amplitude scaling/interpolation.
+    const buf = new Float32Array(SAMPLES_PER_FRAME).fill(0.0); 
     const steps = stepSizes.length;
     let pos = 0;
     for (let s = 0; s < steps; s++) {
@@ -240,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         let duration = stepSizes[s];
         if (type === 2) duration += stepSizes[s + 1] || 0;
-        renderShape(buf, pos, duration, shape, randomShape, amplitude); // ADDED amplitude
+        renderShape(buf, pos, duration, shape, randomShape, amplitude);
         pos += duration;
         if (type === 2) s++;
       }
@@ -248,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return buf;
   }
 
-  function renderShape(buffer, startPos, duration, shape, randomShape, amplitude) { // ADDED amplitude
+  function renderShape(buffer, startPos, duration, shape, randomShape, amplitude) {
     // Basic shape generators (output range [0.0, 1.0] for t in [0, 1])
     const shapeGenerators = {
         // Full wave generators
@@ -271,11 +270,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Helper function to get the correct portion of a wave for the first half (t_half in [0, 1])
     function getSampleFromFirstHalf(generatorName, t_half) {
         switch (generatorName) {
-            case 'sine':     return shapeGenerators.quarter_sine(t_half);   // 0 to 1
-            case 'triangle': return t_half;                                 // 0 to 1 (linear ramp up)
-            case 'saw':      return t_half;                                 // 0 to 1 (linear ramp up)
-            case 'reversesaw': return 1.0 - t_half;                         // 1 to 0 (linear ramp down)
-            case 'pulse':    return shapeGenerators.high(t_half);           // Constant 1.0
+            case 'sine':     return shapeGenerators.quarter_sine(t_half);
+            case 'triangle': return t_half;
+            case 'saw':      return t_half;
+            case 'reversesaw': return 1.0 - t_half;
+            case 'pulse':    return shapeGenerators.high(t_half);
             default:         return 0.0;
         }
     }
@@ -283,11 +282,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Helper function to get the correct portion of a wave for the second half (t_half in [0, 1])
     function getSampleFromSecondHalf(generatorName, t_half) {
         switch (generatorName) {
-            case 'sine':     return shapeGenerators.quarter_cosine(t_half); // 1 to 0
-            case 'triangle': return 1.0 - t_half;                           // 1 to 0 (linear ramp down)
-            case 'saw':      return 1.0 - t_half;                           // 1 to 0 (linear ramp down)
-            case 'reversesaw': return t_half;                               // 0 to 1 (linear ramp up)
-            case 'pulse':    return (t_half < 1.0) ? 1.0 : 0.0;             // Stays high, drops to 0.0 at the end
+            case 'sine':     return shapeGenerators.quarter_cosine(t_half);
+            case 'triangle': return 1.0 - t_half;
+            case 'saw':      return 1.0 - t_half;
+            case 'reversesaw': return t_half;
+            case 'pulse':    return (t_half < 1.0) ? 1.0 : 0.0;
             default:         return 0.0;
         }
     }
@@ -345,13 +344,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         
-        // --- NEW Amplitude Scaling Logic ---
-        // 1. Scale the [0.0, 1.0] output by the random amplitude [0.25, 1.0]. Result: [0.0, amplitude]
-        const scaled_sample = sample * amplitude;
+        // CRITICAL FIX 2: Correctly scale the bipolar signal.
+        // 1. Convert unipolar [0.0, 1.0] to bipolar [-1.0, 1.0].
+        const bipolar_sample = (sample * 2.0) - 1.0;
         
-        // 2. Normalize the scaled sample [0.0, amplitude] to a bipolar range of [-amplitude, amplitude].
-        //    (sample * 2) - 1 becomes (scaled_sample * 2) - amplitude
-        const final_value = (scaled_sample * 2.0) - amplitude;
+        // 2. Scale the bipolar sample by the random amplitude [0.25, 1.0].
+        const final_value = bipolar_sample * amplitude;
 
         // Final clipping
         buffer[startPos + i] = Math.max(-1.0, Math.min(1.0, final_value));
@@ -420,7 +418,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // NEW: WT file writer that mirrors your Python script (vawt + sizes + float32 payload).
-  // Ref: convert-wav-wavetables-to-wt-format.py
   function createWtBlob(audioData, waveSize, waveCount) {
     const headerSize = 4 + 4 + 2 + 2;               // 'vawt' + wave_size + wave_count + reserved
     const totalSize  = headerSize + audioData.length * 4;
@@ -448,7 +445,3 @@ document.addEventListener('DOMContentLoaded', () => {
     for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
   }
 });
-
-
-
-
