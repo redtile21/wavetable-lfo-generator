@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const shapeSelect     = document.getElementById('eventShape');
   const combineSlider   = document.getElementById('combineChance');
   const combineValue    = document.getElementById('combineChanceValue');
-  const exportSelect    = document.getElementById('exportFormat');     // NEW
+  const exportSelect    = document.getElementById('exportFormat');
   const generateButton  = document.getElementById('generateButton');
   const downloadLink    = document.getElementById('downloadLink');
   const statusMessage   = document.getElementById('statusMessage');
@@ -69,26 +69,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const unique01     = generateUniquePatterns(MAX_UNIQUE_FRAMES, steps, numEvents);
     const combined     = applyCombineLogic(unique01, combineChance);
     const uniqueCombined = dedupePatterns(combined);
-    const ordered      = orderBySimilarity(uniqueCombined);
+    const orderedPatterns = orderBySimilarity(uniqueCombined);
 
-    // --- MODIFICATION START ---
-    // Assign a random amplitude to each unique frame/pattern
-    // 0.25 to 1.0
-    const orderedWithAmps = ordered.map(p => ({
+    // NEW: Associate each pattern with a random amplitude (0.25 to 1.0)
+    const uniqueFramesWithAmp = orderedPatterns.map(p => ({
         pattern: p,
-        amplitude: 0.25 + (Math.random() * 0.75) 
+        amplitude: 0.25 + (Math.random() * 0.75) // Random float between 0.25 and 1.0
     }));
 
-    // Render key frames using the assigned amplitude
-    const keyFrames = orderedWithAmps.map(item => 
+    // Render key frames, then morph to 256
+    // Pass the associated amplitude to the rendering function
+    const keyFrames = uniqueFramesWithAmp.map(item =>
         renderPatternToFrame(item.pattern, stepSizes, eventShape, randomShape, item.amplitude)
     );
-    // --- MODIFICATION END ---
-
-    // Interpolate to fill 256 frames
+    
     const allFrames = insertInterpolatedFrames(keyFrames, TOTAL_FRAMES);
 
-    // Flatten samples into a single Float32 buffer
+    // Flatten samples into a single Float32 buffer in [-1, 1]
     const audioData = flattenFrames(allFrames, SAMPLES_PER_FRAME);
 
     // Create the requested file format
@@ -117,11 +114,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Math / helpers ---
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+  // Integer partition of 2048 across 'steps' so sizes sum exactly to 2048
   function computeStepSizes(total, steps) {
     const sizes = new Array(steps);
     for (let i = 0; i < steps; i++) {
       const a = Math.floor((i * total) / steps);
-      const b = Math.floor(((i + 1) * total) / steps);
+      const b = Math.floor(((i + 1) * total) / steps); // Corrected formula
       sizes[i] = b - a;
     }
     return sizes;
@@ -144,6 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return shape;
   }
 
+  // Choose up to 'desiredCount' unique 0/1 patterns with exactly 'eventCount' ones
   function binomial(n, k) {
     if (k < 0 || k > n) return 0;
     if (k === 0 || k === n) return 1;
@@ -171,6 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return out;
   }
 
+  // Combine logic: [1,1] -> [2,0] with probability 'chance'
   function applyCombineLogic(patterns, chance) {
     return patterns.map(src => {
       const p = [...src];
@@ -193,6 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return out;
   }
 
+  // Similarity ordering (Hamming on binary occupancy; '2' occupies two steps)
   function patternToBinaryMask(p) {
     const m = new Uint8Array(p.length);
     for (let i = 0; i < p.length; i++) {
@@ -226,9 +227,9 @@ document.addEventListener('DOMContentLoaded', () => {
     return order.map(i => patterns[i]);
   }
 
-  // --- MODIFIED Rendering ---
+  // Rendering
   function renderPatternToFrame(pattern, stepSizes, shape, randomShape, amplitude) {
-    // Fill with -1.0 (wavetable "silence" or floor for this engine)
+    // Fill with -1.0 (silence floor)
     const buf = new Float32Array(SAMPLES_PER_FRAME).fill(-1.0);
     const steps = stepSizes.length;
     let pos = 0;
@@ -239,7 +240,6 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         let duration = stepSizes[s];
         if (type === 2) duration += stepSizes[s + 1] || 0;
-        // Pass amplitude to shape renderer
         renderShape(buf, pos, duration, shape, randomShape, amplitude);
         pos += duration;
         if (type === 2) s++;
@@ -266,77 +266,4 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'sine':     return shapeGenerators.quarter_sine(t_half);
             case 'triangle': return t_half;
             case 'saw':      return t_half;
-            case 'reversesaw': return 1.0 - t_half;
-            case 'pulse':    return shapeGenerators.high(t_half);
-            default:         return 0.0;
-        }
-    }
-    
-    function getSampleFromSecondHalf(generatorName, t_half) {
-        switch (generatorName) {
-            case 'sine':     return shapeGenerators.quarter_cosine(t_half);
-            case 'triangle': return 1.0 - t_half;
-            case 'saw':      return 1.0 - t_half;
-            case 'reversesaw': return t_half;
-            case 'pulse':    return (t_half < 1.0) ? 1.0 : 0.0;
-            default:         return 0.0;
-        }
-    }
-
-    for (let i = 0; i < duration; i++) {
-        const t = (duration === 1) ? 1.0 : (i / (duration - 1));
-        let sample = 0.0;
-
-        const parts = shape.split('_');
-
-        if (parts.length === 2) {
-            const firstShape = parts[0];
-            const secondShape = parts[1];
-            const isFirstHalf = t < 0.5;
-            const t_half = isFirstHalf ? (t * 2.0) : ((t - 0.5) * 2.0);
-
-            if (isFirstHalf) {
-                sample = getSampleFromFirstHalf(firstShape, t_half);
-            } else {
-                sample = getSampleFromSecondHalf(secondShape, t_half);
-            }
-        } else {
-            switch (shape) {
-                case 'sine':
-                case 'triangle':
-                case 'saw':
-                case 'reversesaw':
-                case 'pulse':
-                    sample = shapeGenerators[shape](t);
-                    break;
-                case 'shark':
-                    const peakTime = 0.5;
-                    if (t <= peakTime) {
-                        const t_rise = t / peakTime;
-                        sample = shapeGenerators.quarter_sine(t_rise);
-                    } else {
-                        const fallDuration = 1.0 - peakTime;
-                        const t_fall = (t - peakTime) / fallDuration;
-                        sample = 1.0 - t_fall;
-                    }
-                    break;
-                case 'random':
-                    sample = randomShape[Math.floor(t * (randomShape.length - 1))];
-                    break;
-            }
-        }
-        
-        // --- MODIFIED Amplitude Scaling ---
-        // Scale the unipolar sample (0 to 1) by amplitude (0 to A)
-        // Then convert to bipolar -1 to 1 range (where -1 is floor)
-        const scaledSample = sample * amplitude;
-        
-        // Final normalization and clipping
-        // (0.0 -> -1.0) and (1.0 -> 1.0) IF amplitude is 1.0.
-        // If amplitude is 0.5: (0.0 -> -1.0) and (0.5 -> 0.0).
-        buffer[startPos + i] = Math.max(-1.0, Math.min(1.0, (scaledSample * 2.0) - 1.0));
-    }
-  }
-
-  function insertInterpolatedFrames(keyFrames, totalTarget) {
-    const U = keyFrames.length;
+            case 'reversesaw': return 1.0
