@@ -69,20 +69,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const unique01     = generateUniquePatterns(MAX_UNIQUE_FRAMES, steps, numEvents);
     const combined     = applyCombineLogic(unique01, combineChance);
     const uniqueCombined = dedupePatterns(combined);
-    const orderedPatterns = orderBySimilarity(uniqueCombined);
+    const ordered      = orderBySimilarity(uniqueCombined);
 
-    // NEW: Associate each pattern with a random amplitude (0.25 to 1.0)
-    const uniqueFramesWithAmp = orderedPatterns.map(p => ({
+    // --- MODIFICATION: Random Amplitude Assignment ---
+    // 1. Map the ordered patterns to objects containing the pattern AND a random amplitude
+    const framesWithAmp = ordered.map(p => ({
         pattern: p,
-        amplitude: 0.25 + (Math.random() * 0.75) // Random float between 0.25 and 1.0
+        // Generate random float between 0.25 and 1.0
+        amplitude: 0.25 + (Math.random() * 0.75)
     }));
 
-    // Render key frames, then morph to 256
-    // Pass the associated amplitude to the rendering function
-    const keyFrames = uniqueFramesWithAmp.map(item =>
+    // 2. Render key frames, passing the specific amplitude for each frame
+    const keyFrames = framesWithAmp.map(item => 
         renderPatternToFrame(item.pattern, stepSizes, eventShape, randomShape, item.amplitude)
     );
-    
+    // --------------------------------------------------
+
     const allFrames = insertInterpolatedFrames(keyFrames, TOTAL_FRAMES);
 
     // Flatten samples into a single Float32 buffer in [-1, 1]
@@ -119,7 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sizes = new Array(steps);
     for (let i = 0; i < steps; i++) {
       const a = Math.floor((i * total) / steps);
-      const b = Math.floor(((i + 1) * total) / steps); // Corrected formula
+      const b = Math.floor(((i + 1) * total) / steps);
       sizes[i] = b - a;
     }
     return sizes;
@@ -227,9 +229,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return order.map(i => patterns[i]);
   }
 
-  // Rendering
+  // --- MODIFIED Rendering ---
   function renderPatternToFrame(pattern, stepSizes, shape, randomShape, amplitude) {
-    // Fill with -1.0 (silence floor)
     const buf = new Float32Array(SAMPLES_PER_FRAME).fill(-1.0);
     const steps = stepSizes.length;
     let pos = 0;
@@ -240,6 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         let duration = stepSizes[s];
         if (type === 2) duration += stepSizes[s + 1] || 0;
+        // Pass amplitude to renderShape
         renderShape(buf, pos, duration, shape, randomShape, amplitude);
         pos += duration;
         if (type === 2) s++;
@@ -266,4 +268,163 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'sine':     return shapeGenerators.quarter_sine(t_half);
             case 'triangle': return t_half;
             case 'saw':      return t_half;
-            case 'reversesaw': return 1.0
+            case 'reversesaw': return 1.0 - t_half;
+            case 'pulse':    return shapeGenerators.high(t_half);
+            default:         return 0.0;
+        }
+    }
+    
+    function getSampleFromSecondHalf(generatorName, t_half) {
+        switch (generatorName) {
+            case 'sine':     return shapeGenerators.quarter_cosine(t_half);
+            case 'triangle': return 1.0 - t_half;
+            case 'saw':      return 1.0 - t_half;
+            case 'reversesaw': return t_half;
+            case 'pulse':    return (t_half < 1.0) ? 1.0 : 0.0;
+            default:         return 0.0;
+        }
+    }
+
+    for (let i = 0; i < duration; i++) {
+        const t = (duration === 1) ? 1.0 : (i / (duration - 1));
+        let sample = 0.0;
+
+        const parts = shape.split('_');
+
+        if (parts.length === 2) {
+            const firstShape = parts[0];
+            const secondShape = parts[1];
+            const isFirstHalf = t < 0.5;
+            const t_half = isFirstHalf ? (t * 2.0) : ((t - 0.5) * 2.0);
+
+            if (isFirstHalf) {
+                sample = getSampleFromFirstHalf(firstShape, t_half);
+            } else {
+                sample = getSampleFromSecondHalf(secondShape, t_half);
+            }
+        } else {
+            switch (shape) {
+                case 'sine':
+                case 'triangle':
+                case 'saw':
+                case 'reversesaw':
+                case 'pulse':
+                    sample = shapeGenerators[shape](t);
+                    break;
+                case 'shark':
+                    const peakTime = 0.5;
+                    if (t <= peakTime) {
+                        const t_rise = t / peakTime;
+                        sample = shapeGenerators.quarter_sine(t_rise);
+                    } else {
+                        const fallDuration = 1.0 - peakTime;
+                        const t_fall = (t - peakTime) / fallDuration;
+                        sample = 1.0 - t_fall;
+                    }
+                    break;
+                case 'random':
+                    sample = randomShape[Math.floor(t * (randomShape.length - 1))];
+                    break;
+            }
+        }
+        
+        // --- MODIFIED Scaling Logic ---
+        // 1. 'sample' is 0.0 to 1.0.
+        // 2. We want to start at -1.0 (Floor) and go up to a peak determined by amplitude.
+        // 3. Formula: -1.0 + (sample * 2.0 * amplitude)
+        //    Example Amp 0.5: 0->-1, 1->0. (Span 1.0)
+        //    Example Amp 1.0: 0->-1, 1->1. (Span 2.0)
+        
+        const finalVal = -1.0 + (sample * 2.0 * amplitude);
+        buffer[startPos + i] = Math.max(-1.0, Math.min(1.0, finalVal));
+    }
+  }
+
+  // Interpolation & flatten
+  function insertInterpolatedFrames(keyFrames, totalTarget) {
+    const U = keyFrames.length;
+    if (U === 0) return [];
+    if (U === 1) return Array.from({ length: totalTarget }, () => keyFrames[0].slice());
+
+    const morphNeeded = totalTarget - U;
+    const gaps = U - 1;
+    const perGap = Math.floor(morphNeeded / gaps);
+    let remainder = morphNeeded % gaps;
+
+    const frames = [];
+    for (let i = 0; i < U - 1; i++) {
+      const a = keyFrames[i], b = keyFrames[i + 1];
+      frames.push(a);
+      const k = perGap + (remainder > 0 ? 1 : 0);
+      if (remainder > 0) remainder--;
+      for (let m = 1; m <= k; m++) {
+        const t = m / (k + 1);
+        frames.push(lerpFrames(a, b, t));
+      }
+    }
+    frames.push(keyFrames[U - 1]);
+    return frames;
+  }
+  function lerpFrames(a, b, t) { const out = new Float32Array(a.length); for (let i = 0; i < a.length; i++) out[i] = a[i] * (1 - t) + b[i] * t; return out; }
+  function flattenFrames(frames, samplesPerFrame) { const out = new Float32Array(frames.length * samplesPerFrame); let pos = 0; for (const fr of frames) { out.set(fr, pos); pos += samplesPerFrame; } return out; }
+
+  // --- File creation ---
+  function createWavBlob(audioData, sampleRate, totalSamples) {
+    const dataSize = totalSamples * 2;
+    const fileSize = 44 + dataSize;
+    const buffer = new ArrayBuffer(fileSize);
+    const view = new DataView(buffer);
+
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, fileSize - 8, true);
+    writeString(view, 8, 'WAVE');
+
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+
+    writeString(view, 36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    let offset = 44;
+    for (let i = 0; i < totalSamples; i++) {
+      const s = Math.max(-1.0, Math.min(1.0, audioData[i]));
+      const val = Math.floor(s * 32767.0);
+      view.setInt16(offset, val, true);
+      offset += 2;
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
+  function createWtBlob(audioData, waveSize, waveCount) {
+    const headerSize = 4 + 4 + 2 + 2;               // 'vawt' + wave_size + wave_count + reserved
+    const totalSize  = headerSize + audioData.length * 4;
+    const buffer     = new ArrayBuffer(totalSize);
+    const view       = new DataView(buffer);
+
+    let o = 0;
+    // 'vawt'
+    writeString(view, o, 'vawt'); o += 4;
+    // wave_size (u32 LE)
+    view.setUint32(o, waveSize, true); o += 4;
+    // wave_count (u16 LE)
+    view.setUint16(o, waveCount, true); o += 2;
+    // reserved (u16 LE) = 0
+    view.setUint16(o, 0, true); o += 2;
+
+    // float32 payload, little-endian
+    for (let i = 0; i < audioData.length; i++, o += 4) {
+      view.setFloat32(o, audioData[i], true);
+    }
+    return new Blob([buffer], { type: 'application/octet-stream' });
+  }
+
+  function writeString(view, offset, str) {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
+});
