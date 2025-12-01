@@ -69,10 +69,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const unique01     = generateUniquePatterns(MAX_UNIQUE_FRAMES, steps, numEvents);
     const combined     = applyCombineLogic(unique01, combineChance);
     const uniqueCombined = dedupePatterns(combined);
-    const ordered      = orderBySimilarity(uniqueCombined);
+    const orderedPatterns      = orderBySimilarity(uniqueCombined); // Renamed to clarify it's just the pattern array
+
+    // NEW: Associate each pattern with a random amplitude (0.25 to 1.0)
+    const uniqueFramesWithAmp = orderedPatterns.map(p => ({
+        pattern: p,
+        amplitude: Math.random() * 0.75 + 0.25 // Generates a random value in [0, 0.75] and shifts it to [0.25, 1.0]
+    }));
 
     // Render key frames, then morph to 256
-    const keyFrames = ordered.map(p => renderPatternToFrame(p, stepSizes, eventShape, randomShape));
+    // NEW: Pass amplitude to the rendering function
+    const keyFrames = uniqueFramesWithAmp.map(item =>
+        renderPatternToFrame(item.pattern, stepSizes, eventShape, randomShape, item.amplitude)
+    );
     const allFrames = insertInterpolatedFrames(keyFrames, TOTAL_FRAMES);
 
     // Flatten samples into a single Float32 buffer in [-1, 1]
@@ -84,7 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (exportFormat === 'wt') {
       // Mirror your Python converter: "vawt" + wave_size + wave_count + 0 + float32 payload (LE).
-      // Ref: convert-wav-wavetables-to-wt-format.py :contentReference[oaicite:6]{index=6}
+      // Ref: convert-wav-wavetables-to-wt-format.py
       blob = createWtBlob(audioData, SAMPLES_PER_FRAME, TOTAL_FRAMES);
       setDownload(blob, `${filenameBase}.wt`);
     } else {
@@ -220,7 +229,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Rendering
-  function renderPatternToFrame(pattern, stepSizes, shape, randomShape) {
+  function renderPatternToFrame(pattern, stepSizes, shape, randomShape, amplitude) { // ADDED amplitude
     const buf = new Float32Array(SAMPLES_PER_FRAME).fill(-1.0);
     const steps = stepSizes.length;
     let pos = 0;
@@ -231,7 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         let duration = stepSizes[s];
         if (type === 2) duration += stepSizes[s + 1] || 0;
-        renderShape(buf, pos, duration, shape, randomShape);
+        renderShape(buf, pos, duration, shape, randomShape, amplitude); // ADDED amplitude
         pos += duration;
         if (type === 2) s++;
       }
@@ -239,7 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return buf;
   }
 
-  function renderShape(buffer, startPos, duration, shape, randomShape) {
+  function renderShape(buffer, startPos, duration, shape, randomShape, amplitude) { // ADDED amplitude
     // Basic shape generators (output range [0.0, 1.0] for t in [0, 1])
     const shapeGenerators = {
         // Full wave generators
@@ -336,8 +345,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         
-        // Final normalization and clipping
-        buffer[startPos + i] = Math.max(-1.0, Math.min(1.0, (sample * 2.0) - 1.0));
+        // --- NEW Amplitude Scaling Logic ---
+        // 1. Scale the [0.0, 1.0] output by the random amplitude [0.25, 1.0]. Result: [0.0, amplitude]
+        const scaled_sample = sample * amplitude;
+        
+        // 2. Normalize the scaled sample [0.0, amplitude] to a bipolar range of [-amplitude, amplitude].
+        //    (sample * 2) - 1 becomes (scaled_sample * 2) - amplitude
+        const final_value = (scaled_sample * 2.0) - amplitude;
+
+        // Final clipping
+        buffer[startPos + i] = Math.max(-1.0, Math.min(1.0, final_value));
     }
 }
 
@@ -403,7 +420,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // NEW: WT file writer that mirrors your Python script (vawt + sizes + float32 payload).
-  // Ref: convert-wav-wavetables-to-wt-format.py :contentReference[oaicite:7]{index=7}
+  // Ref: convert-wav-wavetables-to-wt-format.py
   function createWtBlob(audioData, waveSize, waveCount) {
     const headerSize = 4 + 4 + 2 + 2;               // 'vawt' + wave_size + wave_count + reserved
     const totalSize  = headerSize + audioData.length * 4;
@@ -431,6 +448,7 @@ document.addEventListener('DOMContentLoaded', () => {
     for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
   }
 });
+
 
 
 
